@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>English Learning Assistant</title>
+    <style>
+      :root {
+        --blue-900: #1c3c7a;
+        --blue-700: #2d5bbd;
+        --blue-500: #4a8ef4;
+        --blue-100: #eaf2ff;
+        --gray-50: #f7f9fc;
+        --gray-100: #eef3f7;
+        --gray-200: #e5ebf4;
+        --gray-400: #94a3b8;
+        --gray-700: #334155;
+        --white: #ffffff;
+        --shadow: 0 10px 24px rgba(28, 60, 122, 0.12);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font-family: Arial, sans-serif; background: var(--gray-100); color: var(--gray-700); }
+      body { display: flex; }
+
+      .app-shell {
+        display: flex;
+        width: 100%;
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        width: 290px;
+        background: linear-gradient(180deg, #ffffff 0%, #edf5ff 100%);
+        border-right: 1px solid var(--gray-200);
+        padding: 22px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 700;
+        color: var(--blue-900);
+      }
+
+      .brand-mark {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, var(--blue-700), var(--blue-500));
+        display: grid;
+        place-items: center;
+        color: var(--white);
+        font-size: 20px;
+      }
+
+      .chatbot-name {
+        font-size: 1.05rem;
+        margin-top: 8px;
+        color: var(--gray-700);
+      }
+
+      .primary-btn {
+        background: linear-gradient(135deg, var(--blue-700), var(--blue-500));
+        color: var(--white);
+        border: none;
+        border-radius: 12px;
+        padding: 12px 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        box-shadow: var(--shadow);
+      }
+
+      .primary-btn:hover { transform: translateY(-1px); }
+
+      .sidebar-card {
+        background: var(--white);
+        border: 1px solid var(--gray-200);
+        border-radius: 16px;
+        padding: 16px;
+      }
+
+      .sidebar-card h3 {
+        margin: 0 0 12px;
+        font-size: 0.95rem;
+        color: var(--gray-700);
+      }
+
+      .instruction-list {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--gray-700);
+        line-height: 1.7;
+        font-size: 0.9rem;
+      }
+
+      .main-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .topbar {
+        background: rgba(255,255,255,0.75);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--gray-200);
+        padding: 18px 28px;
+      }
+
+      .title {
+        font-size: clamp(1.3rem, 2vw, 2rem);
+        font-weight: 700;
+        color: var(--blue-900);
+        margin: 0;
+      }
+
+      .subtitle {
+        margin: 6px 0 0;
+        color: var(--gray-700);
+        font-size: 0.96rem;
+      }
+
+      .status-pill {
+        display: inline-block;
+        margin-top: 10px;
+        border-radius: 999px;
+        background: #dcfce7;
+        color: #166534;
+        padding: 6px 12px;
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .content-area {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .chat-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        background: #f8fbff;
+      }
+
+      .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 22px 24px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .message-row {
+        display: flex;
+        width: 100%;
+      }
+
+      .message-row.user { justify-content: flex-end; }
+      .message-row.assistant { justify-content: flex-start; }
+
+      .message-bubble {
+        max-width: min(72%, 620px);
+        padding: 14px 16px;
+        border-radius: 18px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+      }
+
+      .message-row.assistant .message-bubble {
+        background: var(--white);
+        border: 1px solid var(--gray-200);
+        color: var(--gray-700);
+        border-bottom-left-radius: 6px;
+      }
+
+      .message-row.user .message-bubble {
+        background: linear-gradient(135deg, var(--blue-700), var(--blue-500));
+        color: var(--white);
+        border-bottom-right-radius: 6px;
+      }
+
+      .composer {
+        border-top: 1px solid var(--gray-200);
+        background: rgba(255,255,255,0.9);
+        padding: 16px 24px 20px;
+      }
+
+      .composer-box {
+        display: flex;
+        gap: 12px;
+        align-items: flex-end;
+      }
+
+      textarea {
+        flex: 1;
+        resize: vertical;
+        min-height: 54px;
+        max-height: 160px;
+        border: 1px solid var(--gray-200);
+        border-radius: 14px;
+        padding: 14px 16px;
+        font-size: 1rem;
+        background: var(--white);
+        color: var(--gray-700);
+      }
+
+      textarea:focus {
+        outline: 2px solid rgba(74, 142, 244, 0.2);
+        border-color: var(--blue-500);
+      }
+
+      .send-btn {
+        min-width: 110px;
+        height: 54px;
+        border: none;
+        border-radius: 14px;
+        background: linear-gradient(135deg, var(--blue-700), var(--blue-500));
+        color: var(--white);
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .send-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .right-panel {
+        width: 310px;
+        background: linear-gradient(180deg, #f4f8ff 0%, #ffffff 100%);
+        border-left: 1px solid var(--gray-200);
+        padding: 22px 18px;
+      }
+
+      .score-card {
+        background: var(--white);
+        border: 1px solid var(--gray-200);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .score-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .score-box {
+        background: var(--gray-50);
+        border-radius: 12px;
+        padding: 12px;
+        border: 1px solid var(--gray-200);
+      }
+
+      .score-box .label {
+        font-size: 0.78rem;
+        color: var(--gray-400);
+      }
+
+      .score-box .value {
+        margin-top: 8px;
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: var(--blue-900);
+      }
+
+      .list-block {
+        margin-top: 18px;
+      }
+
+      .list-block h4 {
+        margin: 0 0 10px;
+        font-size: 0.95rem;
+        color: var(--gray-700);
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 18px;
+        line-height: 1.6;
+        color: var(--gray-700);
+        font-size: 0.9rem;
+      }
+
+      .muted {
+        color: var(--gray-400);
+        font-style: italic;
+      }
+
+      @media (max-width: 980px) {
+        .app-shell { flex-direction: column; }
+        .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--gray-200); }
+        .content-area { flex-direction: column; }
+        .right-panel { width: 100%; border-left: none; border-top: 1px solid var(--gray-200); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">A</div>
+          <div>
+            <div>English Learning</div>
+            <div class="chatbot-name">English Learning Assistant</div>
+          </div>
+        </div>
+
+        <button id="new-chat" class="primary-btn" type="button">New Chat</button>
+
+        <div class="sidebar-card">
+          <h3>Recent discussions</h3>
+          <p class="muted">No previous conversations yet.</p>
+        </div>
+
+        <div class="sidebar-card">
+          <h3>How it works</h3>
+          <ul class="instruction-list">
+            <li>Ask a question in English.</li>
+            <li>Answer in full sentences.</li>
+            <li>Review grammar and vocabulary feedback.</li>
+            <li>Continue with the next prompt.</li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <h1 class="title">English Learning Assistant</h1>
+          <p class="subtitle">AI-powered English Vocabulary and Grammar Assessment</p>
+          <span class="status-pill">Application ready</span>
+        </header>
+
+        <div class="content-area">
+          <section class="chat-panel">
+            <div id="messages" class="messages" aria-live="polite"></div>
+
+            <div class="composer">
+              <div class="composer-box">
+                <textarea id="message-input" rows="1" placeholder="Type your answer here..." aria-label="Type your answer"></textarea>
+                <button id="send-btn" class="send-btn" type="button">Send</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="right-panel">
+            <div class="score-card">
+              <h3>Assessment Summary</h3>
+              <div class="score-grid">
+                <div class="score-box">
+                  <div class="label">Questions answered</div>
+                  <div id="question-count" class="value">0</div>
+                </div>
+                <div class="score-box">
+                  <div class="label">Grammar</div>
+                  <div id="grammar-score" class="value">—</div>
+                </div>
+                <div class="score-box">
+                  <div class="label">Vocabulary</div>
+                  <div id="vocabulary-score" class="value">—</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="list-block">
+              <h4>Common errors</h4>
+              <ul id="errors-list">
+                <li class="muted">Assessment results will appear after the learner responds.</li>
+              </ul>
+            </div>
+
+            <div class="list-block">
+              <h4>Areas to improve</h4>
+              <ul id="improvements-list">
+                <li class="muted">Results will appear after you answer the first question.</li>
+              </ul>
+            </div>
+
+            <div class="list-block">
+              <h4>Practice suggestions</h4>
+              <ul id="recommendations-list">
+                <li class="muted">Suggestions will appear after the assessment begins.</li>
+              </ul>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const messagesEl = document.getElementById('messages');
+      const inputEl = document.getElementById('message-input');
+      const sendBtn = document.getElementById('send-btn');
+      const newChatBtn = document.getElementById('new-chat');
+
+      const questionCountEl = document.getElementById('question-count');
+      const grammarScoreEl = document.getElementById('grammar-score');
+      const vocabularyScoreEl = document.getElementById('vocabulary-score');
+      const errorsListEl = document.getElementById('errors-list');
+      const improvementsListEl = document.getElementById('improvements-list');
+      const recommendationsListEl = document.getElementById('recommendations-list');
+
+      let isLoading = false;
+
+      function renderMessage(role, text) {
+        const row = document.createElement('div');
+        row.className = `message-row ${role}`;
+
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble';
+        bubble.textContent = text;
+        row.appendChild(bubble);
+        messagesEl.appendChild(row);
+      }
+
+      function updateSummary(summary) {
+        questionCountEl.textContent = summary.question_count ?? 0;
+        grammarScoreEl.textContent = summary.grammar_score ?? '—';
+        vocabularyScoreEl.textContent = summary.vocabulary_score ?? '—';
+
+        function fillList(el, items) {
+          el.innerHTML = '';
+          if (!items || items.length === 0) {
+            const li = document.createElement('li');
+            li.className = 'muted';
+            li.textContent = 'No issues recorded yet.';
+            el.appendChild(li);
+            return;
+          }
+          items.forEach((item) => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            el.appendChild(li);
+          });
+        }
+
+        fillList(errorsListEl, summary.errors || []);
+        fillList(improvementsListEl, summary.improvements || []);
+        fillList(recommendationsListEl, summary.recommendations || []);
+      }
+
+      function renderMessages(messages) {
+        messagesEl.innerHTML = '';
+        messages.forEach((msg) => renderMessage(msg.role, msg.text));
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function setLoadingState(loading) {
+        isLoading = loading;
+        sendBtn.disabled = loading;
+        inputEl.disabled = loading;
+      }
+
+      function handleResponse(payload) {
+        if (payload.messages) renderMessages(payload.messages);
+        if (payload.summary) updateSummary(payload.summary);
+        setLoadingState(false);
+      }
+
+      async function sendAnswer() {
+        const answer = inputEl.value.trim();
+        if (!answer || isLoading) return;
+
+        setLoadingState(true);
+        inputEl.value = '';
+
+        try {
+          const response = await fetch('/api/submit-answer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ answer })
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            alert(payload.error || 'The server could not process the request.');
+            setLoadingState(false);
+            return;
+          }
+          handleResponse(payload);
+        } catch (error) {
+          alert('The server is not responding. Please try again.');
+          setLoadingState(false);
+        }
+      }
+
+      async function startNewChat() {
+        setLoadingState(true);
+        try {
+          const response = await fetch('/api/new-chat', { method: 'POST' });
+          const payload = await response.json();
+          if (payload.messages) renderMessages(payload.messages);
+          if (payload.summary) updateSummary(payload.summary);
+          setLoadingState(false);
+        } catch (error) {
+          alert('The server is not responding. Please try again.');
+          setLoadingState(false);
+        }
+      }
+
+      sendBtn.addEventListener('click', sendAnswer);
+      newChatBtn.addEventListener('click', startNewChat);
+      inputEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          sendAnswer();
+        }
+      });
+
+      updateSummary({ question_count: 0, grammar_score: '—', vocabulary_score: '—', errors: [], improvements: [], recommendations: [] });
+      startNewChat();
+    </script>
+  </body>
+</html>

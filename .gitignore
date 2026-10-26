@@ -1,0 +1,7 @@
+# Large model weights
+*.safetensors
+
+# Local Python environment and generated files
+.venv/
+__pycache__/
+*.py[cod]
