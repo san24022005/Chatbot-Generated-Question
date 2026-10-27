@@ -22,7 +22,7 @@ class LoadedModel:
 MODEL_PATHS = {
     "grammar": {
         "model_dir": PROJECT_DIR / "T5-check-grammar-model",
-        "tokenizer_dir": PROJECT_DIR / "T5-check-grammar-tokenizer" / "T5-base-tokenizer",
+        "tokenizer_dir": PROJECT_DIR / "T5-check-grammar-tokenizer",
     },
 }
 
