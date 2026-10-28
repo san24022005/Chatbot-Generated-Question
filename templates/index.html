@@ -197,6 +197,32 @@
         padding: 16px 24px 20px;
       }
 
+      .mode-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+        font-size: 0.9rem;
+        font-weight: 700;
+      }
+
+      #task-mode {
+        flex: 1;
+        max-width: 320px;
+        border: 1px solid var(--gray-200);
+        border-radius: 10px;
+        padding: 9px 12px;
+        background: var(--white);
+        color: var(--gray-700);
+      }
+
+      #request-status {
+        min-height: 20px;
+        margin: 8px 0 0;
+        color: var(--gray-700);
+        font-size: 0.86rem;
+      }
+
       .composer-box {
         display: flex;
         gap: 12px;
@@ -350,10 +376,19 @@
             <div id="messages" class="messages" aria-live="polite"></div>
 
             <div class="composer">
+              <div class="mode-row">
+                <label for="task-mode">Choose a model action</label>
+                <select id="task-mode">
+                  <option value="assessment">Continue English assessment</option>
+                  <option value="grammar">Check and correct grammar</option>
+                  <option value="questions">Generate questions from context</option>
+                </select>
+              </div>
               <div class="composer-box">
                 <textarea id="message-input" rows="1" placeholder="Type your answer here..." aria-label="Type your answer"></textarea>
                 <button id="send-btn" class="send-btn" type="button">Send</button>
               </div>
+              <p id="request-status" role="status"></p>
             </div>
           </section>
 
@@ -406,6 +441,8 @@
       const inputEl = document.getElementById('message-input');
       const sendBtn = document.getElementById('send-btn');
       const newChatBtn = document.getElementById('new-chat');
+      const taskModeEl = document.getElementById('task-mode');
+      const requestStatusEl = document.getElementById('request-status');
 
       const questionCountEl = document.getElementById('question-count');
       const grammarScoreEl = document.getElementById('grammar-score');
@@ -459,10 +496,13 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
-      function setLoadingState(loading) {
+      function setLoadingState(loading, message = '') {
         isLoading = loading;
         sendBtn.disabled = loading;
         inputEl.disabled = loading;
+        taskModeEl.disabled = loading;
+        sendBtn.textContent = loading ? 'Processing...' : 'Send';
+        requestStatusEl.textContent = message;
       }
 
       function handleResponse(payload) {
@@ -472,28 +512,50 @@
       }
 
       async function sendAnswer() {
-        const answer = inputEl.value.trim();
-        if (!answer || isLoading) return;
+        const text = inputEl.value.trim();
+        if (!text || isLoading) return;
 
-        setLoadingState(true);
+        const mode = taskModeEl.value;
+        setLoadingState(true, 'Running the selected model...');
         inputEl.value = '';
 
         try {
-          const response = await fetch('/api/submit-answer', {
+          let url = '/api/submit-answer';
+          let body = { answer: text };
+          if (mode === 'grammar') {
+            url = '/api/check-grammar';
+            body = { text };
+          } else if (mode === 'questions') {
+            url = '/api/generate-questions';
+            body = { context: text };
+          }
+
+          const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ answer })
+            body: JSON.stringify(body)
           });
           const payload = await response.json();
           if (!response.ok) {
-            alert(payload.error || 'The server could not process the request.');
-            setLoadingState(false);
+            throw new Error(payload.error || 'The server could not process the request.');
+          }
+
+          if (mode === 'assessment') {
+            handleResponse(payload);
+            requestStatusEl.textContent = '';
             return;
           }
-          handleResponse(payload);
+
+          renderMessage('user', text);
+          if (mode === 'grammar') {
+            renderMessage('assistant', `Original text:\n${payload.original_text}\n\nCorrected text:\n${payload.corrected_text}`);
+          } else {
+            renderMessage('assistant', `Generated questions:\n${payload.questions.map((question, index) => `${index + 1}. ${question}`).join('\n')}`);
+          }
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+          setLoadingState(false, 'Model result ready.');
         } catch (error) {
-          alert('The server is not responding. Please try again.');
-          setLoadingState(false);
+          setLoadingState(false, error.message || 'The server is not responding. Please try again.');
         }
       }
 
@@ -513,6 +575,15 @@
 
       sendBtn.addEventListener('click', sendAnswer);
       newChatBtn.addEventListener('click', startNewChat);
+      taskModeEl.addEventListener('change', () => {
+        const placeholders = {
+          assessment: 'Type your answer here...',
+          grammar: 'Enter English text to check and correct...',
+          questions: 'Enter English context to generate questions...'
+        };
+        inputEl.placeholder = placeholders[taskModeEl.value];
+        requestStatusEl.textContent = '';
+      });
       inputEl.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();

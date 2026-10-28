@@ -1,18 +1,36 @@
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
-from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
-import torch
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session
 
-from model_loader import DEVICE, LoadedModel, load_models
+from conversation_manager import (
+    ConversationManager,
+    ConversationManagerRegistry,
+    ConversationState,
+    QuestionGenerationError,
+)
+
+from model_loader import (
+    DEVICE,
+    LoadedModel,
+    check_grammar,
+    generate_questions,
+    load_models,
+)
 
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", "development-only-secret")
+LOGGER = logging.getLogger(__name__)
 MODELS: dict[str, LoadedModel] = {}
 MODEL_LOAD_ERRORS: dict[str, str] = {}
+CONVERSATION_REGISTRY = ConversationManagerRegistry()
 
 
 def ensure_models_loaded() -> None:
@@ -26,19 +44,6 @@ def ensure_models_loaded() -> None:
         MODELS = {}
 
 
-@dataclass
-class AssessmentState:
-    question_count: int = 0
-    grammar_score: int | None = None
-    vocabulary_score: int | None = None
-    errors: list[str] = field(default_factory=list)
-    improvements: list[str] = field(default_factory=list)
-    recommendations: list[str] = field(default_factory=list)
-    is_active: bool = False
-    history: list[dict[str, str]] = field(default_factory=list)
-
-
-ASSESSMENT = AssessmentState()
 QUESTION_BANK = [
     "What do you usually do after school?",
     "Describe your favorite place to study and explain why you like it.",
@@ -48,8 +53,18 @@ QUESTION_BANK = [
 ]
 
 
-def _generate_question(index: int) -> str:
-    return QUESTION_BANK[index % len(QUESTION_BANK)]
+def _generate_question(context: dict[str, Any]) -> str:
+    """Adapter: serialize the explicit manager context for the existing T5 API."""
+    prompt = json.dumps(context, ensure_ascii=False)
+    if MODELS.get("question") is None:
+        raise RuntimeError("The question model is not available.")
+    return generate_questions(prompt)
+
+
+CONVERSATION_MANAGER = ConversationManager(
+    question_generator=_generate_question,
+    fallback_questions=QUESTION_BANK,
+)
 
 
 def _normalize_text(value: str) -> str:
@@ -136,22 +151,9 @@ def _run_grammar_correction(model: LoadedModel, text: str) -> str:
     if model is None:
         return _rule_based_correction(text)
     try:
-        encoded = model.tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=model.max_input_tokens,
-        )
-        encoded = {key: value.to(DEVICE) for key, value in encoded.items()}
-        with torch.inference_mode():
-            output_ids = model.model.generate(
-                **encoded,
-                max_length=min(model.max_input_tokens, 128),
-                num_beams=4,
-                do_sample=False,
-            )
-        return model.tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+        return check_grammar(text)
     except Exception:
+        LOGGER.exception("Grammar inference failed")
         return _rule_based_correction(text)
 
 
@@ -166,31 +168,83 @@ def _generate_reference(answer: str) -> str:
     return "A strong answer could be: 'I think this topic is important because it helps me improve my speaking and writing skills in real life.'"
 
 
-def _set_new_chat_session() -> dict[str, Any]:
-    global ASSESSMENT
-    ASSESSMENT = AssessmentState(is_active=True)
-    first_question = _generate_question(0)
+def _messages_for(state: ConversationState) -> list[dict[str, str]]:
+    messages = [
+        {
+            "role": "assistant",
+            "text": f"Hello! I’m your English Learning Assistant. {state.current_question}",
+        }
+    ]
+    for turn in state.history:
+        messages.append({"role": "user", "text": turn.answer})
+        messages.append({"role": "assistant", "text": _format_turn(state, turn)})
+    return messages
+
+
+def _display_summary(state: ConversationState) -> dict[str, Any]:
+    summary = CONVERSATION_MANAGER.summary(state)
+    latest = state.latest_analysis
+    summary.update(
+        {
+            "grammar_score": latest.get("grammar_score", "—"),
+            "vocabulary_score": latest.get("vocabulary_score", "—"),
+            "errors": list(state.grammar_errors),
+            "improvements": list(state.vocabulary_issues),
+            "recommendations": summary["recommendations"],
+            "difficulty": state.difficulty,
+        }
+    )
+    return summary
+
+
+def _format_turn(state: ConversationState, turn: Any) -> str:
+    analysis = turn.analysis
+    feedback = [
+        "Your answer is understandable, and there is room to improve your grammar and vocabulary.",
+        f"Grammar score: {analysis['grammar_score']}/100",
+        f"Vocabulary score: {analysis['vocabulary_score']}/100",
+    ]
+    feedback.extend(analysis["grammar_errors"][:3])
+    feedback.extend(analysis["vocabulary_issues"][:3])
+    feedback.append("Suggested correction:\n" + (analysis["corrected_text"] or "No correction was returned."))
+    feedback.append("Reference answer:\n" + _generate_reference(turn.answer))
+    if state.status == "completed":
+        feedback.append("Assessment complete. You can start a new chat anytime.")
+    elif turn.strategy != "finish":
+        feedback.append(f"Next question:\n{state.current_question}")
+    return "\n\n".join(feedback)
+
+
+def _set_new_chat_session(data: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = data or {}
+    session_id = str(uuid4())
+    state = CONVERSATION_MANAGER.create_session(
+        session_id=session_id,
+        learner_id=data.get("learner_id"),
+        topic=str(data.get("topic") or "English communication"),
+        assessment_goal=str(data.get("assessment_goal") or "both"),
+        difficulty=int(data.get("difficulty") or 2),
+        max_turns=int(data.get("max_turns") or 8),
+    )
+    CONVERSATION_REGISTRY.create(state)
+    session["conversation_session_id"] = session_id
+    session["ui_messages"] = []
+    try:
+        first_question = CONVERSATION_MANAGER.start(state)
+    except QuestionGenerationError as exc:
+        CONVERSATION_MANAGER.stop(state, reason="question_generation_failed")
+        return {"messages": [], "status": "completed", "question": "", "summary": _display_summary(state), "assessment_ready": True, "error": str(exc)}
+
     model_note = ""
     if not MODELS:
         model_note = "\n\nThe AI model is unavailable in this environment, so the app is using a safe fallback evaluation mode."
-    ASSESSMENT.history = [
-        {
-            "role": "assistant",
-            "text": f"Hello! I’m your English Learning Assistant. {first_question}{model_note}",
-        }
-    ]
+    messages = [{"role": "assistant", "text": f"Hello! I’m your English Learning Assistant. {first_question}{model_note}"}]
+    session["ui_messages"] = messages
     return {
-        "messages": ASSESSMENT.history,
+        "messages": messages,
         "status": "ready",
         "question": first_question,
-        "summary": {
-            "question_count": 0,
-            "grammar_score": "—",
-            "vocabulary_score": "—",
-            "errors": [],
-            "improvements": [],
-            "recommendations": [],
-        },
+        "summary": _display_summary(state),
         "assessment_ready": False,
     }
 
@@ -216,88 +270,159 @@ def health_check():
 @app.route("/api/new-chat", methods=["POST"])
 def new_chat():
     ensure_models_loaded()
-    return jsonify(_set_new_chat_session())
+    data = request.get_json(silent=True) or {}
+    return jsonify(_set_new_chat_session(data if isinstance(data, dict) else {}))
 
 
 @app.route("/api/submit-answer", methods=["POST"])
 def submit_answer():
     ensure_models_loaded()
     data = request.get_json(silent=True) or {}
-    answer = _normalize_text(data.get("answer", ""))
+    answer = _normalize_text(data.get("answer", "") if isinstance(data, dict) else "")
     if not answer:
         return jsonify({"error": "Please enter an answer before sending."}), 400
 
-    if not ASSESSMENT.is_active:
+    session_id = session.get("conversation_session_id")
+    try:
+        state = CONVERSATION_REGISTRY.get(session_id)
+    except KeyError:
         return jsonify({"error": "The assessment has not started yet. Please create a new chat."}), 400
 
     grammar_errors, vocab_errors, tips = _extract_errors(answer)
-    grammar_score = max(60, 100 - len(grammar_errors) * 12)
-    vocabulary_score = max(60, 100 - len(vocab_errors) * 10)
-
-    ASSESSMENT.question_count += 1
-    ASSESSMENT.grammar_score = grammar_score
-    ASSESSMENT.vocabulary_score = vocabulary_score
-    ASSESSMENT.errors = grammar_errors
-    ASSESSMENT.improvements = vocab_errors
-    ASSESSMENT.recommendations = tips
-
-    if "grammar" in MODELS:
-        try:
-            corrected = _run_grammar_correction(MODELS["grammar"], answer)
-        except Exception as exc:
-            corrected = f"The model could not correct this answer: {type(exc).__name__}."
-    else:
-        corrected = _rule_based_correction(answer)
-
-    reference = _generate_reference(answer)
-    feedback = [
-        "Your answer is understandable, and there is room to improve the grammar and vocabulary structure.",
-        f"Grammar score: {grammar_score}/100",
-        f"Vocabulary score: {vocabulary_score}/100",
-    ]
-    feedback.extend(grammar_errors[:3])
-    feedback.extend(vocab_errors[:3])
-    feedback.extend(tips[:2])
-
-    next_question = _generate_question(ASSESSMENT.question_count)
-    ASSESSMENT.history.append({"role": "user", "text": answer})
-    ASSESSMENT.history.append(
-        {
-            "role": "assistant",
-            "text": "\n\n".join(
-                [
-                    *feedback,
-                    "Suggested correction:\n" + corrected,
-                    "Reference answer:\n" + reference,
-                    "Next question:\n" + next_question,
-                ]
-            ),
-        }
-    )
-
-    summary = {
-        "question_count": ASSESSMENT.question_count,
-        "grammar_score": grammar_score,
-        "vocabulary_score": vocabulary_score,
-        "errors": grammar_errors,
-        "improvements": vocab_errors,
-        "recommendations": tips,
+    try:
+        corrected_text = (
+            _run_grammar_correction(MODELS["grammar"], answer)
+            if "grammar" in MODELS
+            else _rule_based_correction(answer)
+        )
+    except Exception:
+        LOGGER.exception("Grammar analysis adapter failed")
+        corrected_text = _rule_based_correction(answer)
+    analysis = {
+        "grammar_errors": grammar_errors,
+        "vocabulary_issues": vocab_errors,
+        "grammar_score": max(60, 100 - len(grammar_errors) * 12),
+        "vocabulary_score": max(60, 100 - len(vocab_errors) * 10),
+        "corrected_text": corrected_text,
+        "confidence": 75,
     }
+
+    try:
+        result = CONVERSATION_MANAGER.process_answer(
+            state,
+            answer,
+            analysis,
+            stop_requested=bool(data.get("end_session", False)),
+        )
+    except (TypeError, ValueError) as exc:
+        LOGGER.warning("Invalid assessment answer: %s", exc)
+        return jsonify({"error": str(exc)}), 400
+
+    messages = session.get("ui_messages", [])
+    messages.append({"role": "user", "text": answer})
+    messages.append({"role": "assistant", "text": _format_turn(state, state.history[-1])})
+    session["ui_messages"] = messages
 
     return jsonify(
         {
-            "messages": ASSESSMENT.history,
-            "status": "ready",
-            "question": next_question,
-            "summary": summary,
+            "messages": messages,
+            "status": result["status"] if result["status"] == "completed" else "ready",
+            "question": result["question"],
+            "summary": _display_summary(state),
             "assessment_ready": True,
+            "strategy": result["strategy"],
+            "difficulty": result["difficulty"],
+            "error": result.get("error"),
         }
     )
+
+
+@app.route("/api/end-chat", methods=["POST"])
+def end_chat():
+    session_id = session.get("conversation_session_id")
+    try:
+        state = CONVERSATION_REGISTRY.get(session_id)
+    except KeyError:
+        return jsonify({"error": "No active assessment session."}), 400
+
+    summary = CONVERSATION_MANAGER.stop(state, reason="learner_requested")
+    return jsonify(
+        {
+            "status": state.status,
+            "summary": summary,
+            "messages": session.get("ui_messages", []),
+        }
+    )
+
+
+@app.route("/api/check-grammar", methods=["POST"])
+def check_grammar_endpoint():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "error": "Request body must be a JSON object."}), 400
+
+    text = _normalize_text(data.get("text", ""))
+    if not text:
+        return jsonify({"success": False, "error": "Please enter text to correct."}), 400
+
+    try:
+        corrected = check_grammar(text)
+    except Exception as exc:
+        LOGGER.exception("Grammar endpoint inference failed")
+        return jsonify(
+            {
+                "success": False,
+                "error": f"The grammar model could not process the text: {type(exc).__name__}.",
+            }
+        ), 503
+
+    if not corrected:
+        return jsonify({"success": False, "error": "The grammar model returned no result."}), 502
+    return jsonify({"success": True, "original_text": text, "corrected_text": corrected})
+
+
+@app.route("/api/generate-questions", methods=["POST"])
+def generate_questions_endpoint():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "error": "Request body must be a JSON object."}), 400
+
+    context = _normalize_text(data.get("context", ""))
+    if not context:
+        return jsonify({"success": False, "error": "Please enter context to generate questions."}), 400
+
+    try:
+        generated = generate_questions(context)
+    except Exception as exc:
+        LOGGER.exception("Question endpoint inference failed")
+        return jsonify(
+            {
+                "success": False,
+                "error": f"The question model could not process the text: {type(exc).__name__}.",
+            }
+        ), 503
+
+    if not generated:
+        return jsonify({"success": False, "error": "The question model returned no result."}), 502
+    questions = [line.strip() for line in generated.splitlines() if line.strip()]
+    return jsonify({"success": True, "context": context, "questions": questions or [generated]})
 
 
 @app.route("/api/chat", methods=["GET"])
 def chat_status():
-    return jsonify({"messages": ASSESSMENT.history, "status": "ready"})
+    session_id = session.get("conversation_session_id")
+    try:
+        state = CONVERSATION_REGISTRY.get(session_id)
+    except KeyError:
+        return jsonify({"messages": [], "status": "not_started", "summary": None}), 404
+    return jsonify(
+        {
+            "messages": session.get("ui_messages", []),
+            "status": state.status,
+            "question": state.current_question,
+            "summary": _display_summary(state),
+        }
+    )
 
 
 if __name__ == "__main__":

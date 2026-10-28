@@ -3,5 +3,7 @@
 
 # Local Python environment and generated files
 .venv/
+.venv311/
+.venv-old/
 __pycache__/
 *.py[cod]
