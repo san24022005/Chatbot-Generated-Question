@@ -7,11 +7,10 @@ năng lực tiếng Anh thông qua tương tác hỏi đáp thích ứng. Ứng 
 tại cho phép người dùng trả lời câu hỏi tiếng Anh, xem điểm ngữ pháp/từ vựng,
 nhận góp ý và câu gợi ý sửa lỗi.
 
-> **Tình trạng triển khai:** phiên bản hiện tại là bản thử nghiệm. Câu hỏi được
-> chọn tuần tự từ một danh sách có sẵn; điểm và một phần nhận xét được tính
-> bằng luật đơn giản. Ứng dụng có nạp mô hình T5 kiểm tra ngữ pháp nếu tệp mô
-> hình có đầy đủ. Mô hình T5 tạo câu hỏi hiện chưa được gọi trong luồng chạy
-> ứng dụng.
+**Tình trạng triển khai:** ứng dụng sử dụng ba mô hình T5 cục bộ theo luồng
+sửa ngữ pháp → mở rộng ngữ cảnh → tạo câu hỏi tiếp theo. Cần có đủ ba model
+và tokenizer trong các thư mục được liệt kê bên dưới; ứng dụng báo lỗi thay vì
+thay kết quả model bằng dữ liệu mẫu.
 
 ## Nguồn dữ liệu
 
@@ -31,54 +30,45 @@ này khi khởi chạy.
 ```text
 .
 ├── app.py                              # Ứng dụng web Flask và API đánh giá
-├── model_loader.py                     # Nạp mô hình T5 kiểm tra ngữ pháp
+├── model_loader.py                     # Nạp và dùng cả ba mô hình T5
+├── conversation_manager.py             # Trạng thái và điều phối hội thoại
 ├── requirements.txt                    # Các thư viện Python
 ├── test_check_grammar/
-│   └── run.py                          # Kiểm thử sửa ngữ pháp bằng model riêng
+│   └── run.py                          # Chạy thử model sửa ngữ pháp
 ├── test_generated_question/
-│   └── run.py                          # Kiểm thử tạo câu hỏi bằng model riêng
+│   └── run.py                          # Chạy thử model tạo câu hỏi
 ├── templates/
 │   └── index.html                      # Giao diện chatbot
-├── T5-check-grammar-model/
-│   ├── config.json
-│   ├── generation_config.json
-│   └── model.safetensors               # Trọng số T5 kiểm tra ngữ pháp
-├── T5-check-grammar-tokenizer/
-│   ├── tokenizer.json
-│   └── tokenizer_config.json
-├── T5-question-generated-model/
-│   ├── config.json
-│   ├── generation_config.json
-│   └── model.safetensors               # Trọng số T5 tạo câu hỏi
-└── T5-question-generated-tokenizer/
-    ├── tokenizer.json
-    └── tokenizer_config.json
+├── T5_Check_Grammar/
+│   └── config.json, tokenizer files, model.safetensors
+├── T5_Question_Generation/model/
+│   └── config.json, tokenizer files, model.safetensors
+└── T5_Contextual_Text_Generation/fine_tuned_model/
+    └── config.json, tokenizer files, model.safetensors
 ```
 
-## Tải các mô hình
+Mỗi thư mục model phải chứa `config.json`, tokenizer (`tokenizer.json` và/hoặc
+`tokenizer_config.json`) và trọng số `model.safetensors`. Các tệp model lớn
+không được lưu trong Git. `model_loader.py` nạp cả ba model một lần và giữ
+chúng trong bộ nhớ để dùng lại.
 
-Tải hoặc cập nhật tệp `model.safetensors` từ các thư mục Google Drive sau:
+## Luồng xử lý
 
-1. **T5 tạo câu hỏi**: [Google Drive](https://drive.google.com/drive/folders/1MGY-7CC3iCZfHfkbNU97Pr9ozU9PjDSI?usp=drive_link)
-2. **T5 kiểm tra ngữ pháp**: [Google Drive](https://drive.google.com/drive/folders/15R-zuBeOkUwoRQKcwpgYMGu5OxQSmpxk?usp=drive_link)
+1. Mỗi phiên bắt đầu bằng một câu hỏi ngẫu nhiên trong danh sách câu hỏi có sẵn.
+2. Model Check Grammar sửa câu trả lời nếu cần; câu không đổi được giữ nguyên
+   và người học nhận lời khích lệ có sẵn.
+3. Model Contextual Text Generation mở rộng câu đã sửa thành một đoạn ngắn.
+4. Model Question Generation nhận lịch sử, câu đã sửa, đoạn mở rộng và các câu
+   đã hỏi để tạo các câu tiếp theo; manager từ chối câu bị lặp.
 
-Trong Google Drive, mở thư mục tương ứng và tải `model.safetensors`. Chép
-tệp vào đúng thư mục mô hình trong thư mục dự án, giữ nguyên tên tệp:
-
-```text
-T5-question-generated-model/model.safetensors
-T5-check-grammar-model/model.safetensors
-```
-
-Giữ lại các tệp `config.json` và `generation_config.json` đi kèm trong mỗi
-thư mục mô hình; không thay chúng bằng tệp trọng số. Tokenizer nằm trong các
-thư mục tokenizer riêng như cấu trúc ở trên. Mô hình tạo câu hỏi hiện chưa
-được ứng dụng nạp; mô hình kiểm tra ngữ pháp được nạp khi bắt đầu phiên chat.
+Điểm ngữ pháp phản ánh việc model có đề xuất sửa câu hay không; điểm từ vựng
+là một chỉ số đơn giản về độ đa dạng từ. Đây là tín hiệu luyện tập, không phải
+đánh giá chuyên môn hoặc điểm chuẩn hóa theo CEFR.
 
 ## Kiểm thử riêng từng mô hình
 
-Hai thư mục kiểm thử chạy độc lập và nạp đúng model/tokenizer đã huấn luyện
-tương ứng. Chạy lệnh tại thư mục gốc dự án, trong môi trường đã cài thư viện:
+Các script riêng nạp model từ đúng thư mục cục bộ. Chạy lệnh tại thư mục gốc
+dự án, trong môi trường đã cài thư viện:
 
 Kiểm thử mô hình sửa lỗi ngữ pháp
 
@@ -88,7 +78,7 @@ python .\test_check_grammar\run.py --text "Text"
 Ví dụ:
 
 ```powershell
-python .\test_check_grammar\run.py --text "I once visit Da Lat with my family. We enjoys the cool weather, beautiful scenery, and delicious food. It were an unforgettable trip."
+python .\test_check_grammar\run.py --text "I usually go home, have dinner with my family, and do my homework. In my free time, I enjoy listening to music, watching movies, and learning new things."
 ```
 
 Kiểm thử mô hình sinh câu hỏi
@@ -106,6 +96,9 @@ Bỏ `--text "..."` để nhập một đoạn văn bản trực tiếp khi chư
 Kết quả lần lượt là văn bản đã sửa lỗi ngữ pháp và câu hỏi được tạo từ đoạn
 văn bản. Các lệnh yêu cầu tệp model và tokenizer tương ứng có sẵn; lỗi nạp
 model sẽ được hiển thị thay vì chuyển sang kết quả dự phòng.
+
+Model sửa ngữ pháp nhận tiền tố tác vụ `grammar correction:` trước văn bản đầu
+vào để tránh tự ý bỏ nội dung khi trả kết quả.
 
 ## Cài đặt thư viện
 
@@ -202,8 +195,11 @@ kích hoạt môi trường ảo, có thể thoát bằng lệnh `deactivate`.
   môi trường: có thể chạy trực tiếp bằng `\.venv\Scripts\python.exe app.py`.
 - Nếu giao diện báo không tải được mô hình, kiểm tra `model.safetensors`,
   `config.json` và các tệp tokenizer có trong đúng thư mục như cấu trúc dự án.
-- Nếu không nạp được mô hình, ứng dụng vẫn có chế độ dự phòng dựa trên luật
-  đơn giản; kết quả chế độ này không tương đương với đánh giá bằng mô hình AI.
+- Nếu không nạp được mô hình, API sẽ trả lỗi thay vì thay kết quả bằng luật
+  đơn giản. Xem `/api/health` để biết mô hình nào thiếu và nội dung `model_errors`.
+- Nếu `POST /api/submit-answer` trả về 503, kiểm tra nội dung `error` trong
+  phản hồi và traceback ở terminal. Khi mô hình tạo câu hỏi không hợp lệ hoặc
+  trùng lặp, ứng dụng sẽ dùng câu hỏi dự phòng và ghi cảnh báo vào terminal.
 - Nếu Windows báo `The paging file is too small` khi chạy một lệnh kiểm thử,
   hãy đóng các ứng dụng khác hoặc tăng kích thước paging file rồi thử lại;
   model cần đủ bộ nhớ khả dụng để nạp trọng số và chạy suy luận.
