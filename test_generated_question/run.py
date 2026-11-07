@@ -21,8 +21,8 @@ def main() -> None:
         parser.error("Please provide a paragraph.")
 
     model = load_local_t5_model(
-        model_dir=PROJECT_DIR / "T5-question-generated-model",
-        tokenizer_dir=PROJECT_DIR / "T5-question-generated-tokenizer",
+        model_dir=PROJECT_DIR / "T5_Question_Generation" / "model",
+        tokenizer_dir=PROJECT_DIR / "T5_Question_Generation" / "model",
     )
     input_text = f"generate questions: {text.strip()}"
     inputs = model.tokenizer(

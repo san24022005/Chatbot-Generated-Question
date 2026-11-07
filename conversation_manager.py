@@ -3,9 +3,13 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from difflib import SequenceMatcher
+import logging
 import re
 from threading import RLock
 from typing import Callable, Iterable, Mapping
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 STOP_WORDS = {
@@ -53,6 +57,7 @@ class ConversationTurn:
     answer: str
     analysis: dict[str, object] = field(default_factory=dict)
     strategy: str = "follow_up"
+    expanded_text: str = ""
 
 
 @dataclass
@@ -123,11 +128,16 @@ class ConversationManager:
             difficulty_history=[self._bounded_difficulty(difficulty)],
         )
 
-    def start(self, state: ConversationState) -> str:
+    def start(self, state: ConversationState, initial_question: str | None = None) -> str:
         if state.status != "active":
             raise ValueError("Only an active session can start a question.")
-        context = self.build_context(state, strategy="follow_up")
-        question = self._generate_valid_question(state, context)
+        if initial_question is None:
+            context = self.build_context(state, strategy="follow_up")
+            question = self._generate_valid_question(state, context)
+        else:
+            question = str(initial_question).strip()
+            if not self._is_valid_question(question):
+                raise ValueError("The initial question must be a valid question.")
         state.current_question = question
         state.used_questions.append(question)
         return question
@@ -138,6 +148,7 @@ class ConversationManager:
         answer: str,
         analysis: Mapping[str, object] | None,
         stop_requested: bool = False,
+        expanded_text: str = "",
     ) -> dict[str, object]:
         normalized_answer = " ".join(str(answer or "").strip().split())
         if not normalized_answer:
@@ -165,6 +176,7 @@ class ConversationManager:
                 answer=normalized_answer,
                 analysis=safe_analysis,
                 strategy=strategy,
+                expanded_text=str(expanded_text).strip(),
             )
         )
 
@@ -243,18 +255,30 @@ class ConversationManager:
 
     def build_context(self, state: ConversationState, strategy: str) -> dict[str, object]:
         latest = asdict(state.history[-1]) if state.history else {}
+        latest_analysis = state.latest_analysis
         weak_spots = list(dict.fromkeys([*state.grammar_errors, *state.vocabulary_issues]))
         return {
             "topic": state.topic,
             "assessment_goal": state.assessment_goal,
             "difficulty": state.difficulty,
+            "learner_level": self._difficulty_label(state.difficulty),
             "latest_answer": latest.get("answer", ""),
-            "latest_analysis": state.latest_analysis,
+            "latest_corrected_answer": latest_analysis.get("corrected_text", ""),
+            "latest_expanded_text": latest.get("expanded_text", ""),
+            "latest_analysis": latest_analysis,
             "weak_spots": weak_spots[-12:],
             "recent_history": [asdict(turn) for turn in state.history[-4:]],
             "strategy": strategy,
             "previous_questions": list(state.used_questions),
         }
+
+    @staticmethod
+    def _difficulty_label(difficulty: int) -> str:
+        if difficulty <= 2:
+            return "beginner"
+        if difficulty <= 4:
+            return "intermediate"
+        return "advanced"
 
     def stop(self, state: ConversationState, reason: str = "learner_requested") -> dict[str, object]:
         if state.status == "active":
@@ -293,14 +317,27 @@ class ConversationManager:
                     raise QuestionGenerationError(f"Question model failed: {exc}") from exc
                 continue
 
-            if candidate and not self._is_duplicate(state, candidate):
+            if self._is_valid_question(candidate) and not self._is_duplicate(state, candidate):
                 return candidate
 
         for fallback in self.fallback_questions:
-            if fallback and not self._is_duplicate(state, fallback):
+            if self._is_valid_question(fallback) and not self._is_duplicate(state, fallback):
+                LOGGER.warning("Question generation returned no unique valid question; using fallback.")
                 return fallback
         raise QuestionGenerationError(
             f"No unique valid question could be generated after {self.rules.max_question_retries} retries."
+        )
+
+    @staticmethod
+    def _is_valid_question(candidate: str) -> bool:
+        if candidate.endswith("?"):
+            return candidate.count("?") == 1
+        return bool(
+            re.match(
+                r"^(?:compare|describe|discuss|explain|share|talk about|tell me)\b",
+                candidate,
+                re.IGNORECASE,
+            )
         )
 
     def _is_duplicate(self, state: ConversationState, candidate: str) -> bool:
@@ -327,6 +364,7 @@ class ConversationManager:
             "grammar_score": grammar_score,
             "vocabulary_score": vocabulary_score,
             "corrected_text": corrected.strip(),
+            "is_correct": analysis.get("is_correct") is True,
             "confidence": self._bounded_score(analysis.get("confidence"), invalid_fields, "confidence", default=50),
             "invalid_fields": sorted(invalid_fields),
         }

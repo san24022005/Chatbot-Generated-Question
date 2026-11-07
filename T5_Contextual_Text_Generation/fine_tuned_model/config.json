@@ -57,7 +57,7 @@
     }
   },
   "tie_word_embeddings": true,
-  "transformers_version": "5.20.2",
+  "transformers_version": "5.22.1",
   "use_cache": false,
   "vocab_size": 32128
 }

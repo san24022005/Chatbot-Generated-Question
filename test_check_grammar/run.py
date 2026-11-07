@@ -7,7 +7,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
-from model_loader import generate_text, load_local_t5_model
+from model_loader import generate_grammar_correction, load_local_t5_model
 
 
 def main() -> None:
@@ -21,11 +21,11 @@ def main() -> None:
         parser.error("Please provide a paragraph.")
 
     model = load_local_t5_model(
-        model_dir=PROJECT_DIR / "T5-check-grammar-model",
-        tokenizer_dir=PROJECT_DIR / "T5-check-grammar-tokenizer",
+        model_dir=PROJECT_DIR / "T5_Check_Grammar",
+        tokenizer_dir=PROJECT_DIR / "T5_Check_Grammar",
     )
     print("Corrected text:")
-    print(generate_text(model, text))
+    print(generate_grammar_correction(model, text))
 
 
 if __name__ == "__main__":

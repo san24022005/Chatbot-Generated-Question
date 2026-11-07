@@ -28,15 +28,17 @@ _LOAD_LOCK = Lock()
 
 
 MODEL_PATHS = {
-    # Mô hình kiểm tra ngữ pháp hiện có
     "grammar": {
-        "model_dir": PROJECT_DIR / "T5-check-grammar-model",
-        "tokenizer_dir": PROJECT_DIR / "T5-check-grammar-tokenizer",
+        "model_dir": PROJECT_DIR / "T5_Check_Grammar",
+        "tokenizer_dir": PROJECT_DIR / "T5_Check_Grammar",
     },
-    # Mô hình sinh câu hỏi
     "question": {
-        "model_dir": PROJECT_DIR / "T5-question-generated-model",
-        "tokenizer_dir": PROJECT_DIR / "T5-question-generated-tokenizer",
+        "model_dir": PROJECT_DIR / "T5_Question_Generation" / "model",
+        "tokenizer_dir": PROJECT_DIR / "T5_Question_Generation" / "model",
+    },
+    "contextual": {
+        "model_dir": PROJECT_DIR / "T5_Contextual_Text_Generation" / "fine_tuned_model",
+        "tokenizer_dir": PROJECT_DIR / "T5_Contextual_Text_Generation" / "fine_tuned_model",
     },
 }
 
@@ -92,49 +94,85 @@ def load_local_t5_model(model_dir: Path, tokenizer_dir: Path | None = None) -> L
     )
 
 
-def generate_text(loaded_model: LoadedModel, text: str, max_output_tokens: int = 128) -> str:
+def _generate(
+    loaded_model: LoadedModel,
+    text: str,
+    max_output_tokens: int,
+    no_repeat_ngram_size: int = 0,
+    max_input_tokens: int | None = None,
+) -> str:
+    input_token_limit = min(
+        loaded_model.max_input_tokens,
+        max_input_tokens or loaded_model.max_input_tokens,
+    )
     encoded = loaded_model.tokenizer(
         text,
         return_tensors="pt",
         truncation=True,
-        max_length=loaded_model.max_input_tokens,
+        max_length=input_token_limit,
     )
     encoded = {key: value.to(loaded_model.model.device) for key, value in encoded.items()}
     with torch.inference_mode():
         output_ids = loaded_model.model.generate(
             **encoded,
-            max_length=min(loaded_model.max_input_tokens, max_output_tokens),
+            max_new_tokens=max_output_tokens,
             num_beams=4,
             do_sample=False,
+            no_repeat_ngram_size=no_repeat_ngram_size,
         )
     return loaded_model.tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
 
 
+def generate_text(
+    loaded_model: LoadedModel,
+    text: str,
+    max_output_tokens: int = 128,
+    max_input_tokens: int | None = None,
+) -> str:
+    return _generate(
+        loaded_model,
+        text,
+        max_output_tokens,
+        max_input_tokens=max_input_tokens,
+    )
+
+
+def generate_grammar_correction(loaded_model: LoadedModel, text: str) -> str:
+    return generate_text(loaded_model, f"grammar correction: {text}")
+
+
 def check_grammar(text: str) -> str:
     loaded = get_grammar_model()
-    return generate_text(loaded, text)
+    return generate_grammar_correction(loaded, text)
 
 
 def generate_questions(context: str) -> str:
     loaded = get_question_model()
     input_text = f"generate questions: {context.strip()}"
-    encoded = loaded.tokenizer(
-        input_text,
-        return_tensors="pt",
-        truncation=True,
-        max_length=loaded.max_input_tokens,
+    return _generate(loaded, input_text, max_output_tokens=512, no_repeat_ngram_size=2)
+
+
+def generate_contextual_text(
+    topic: str,
+    conversation_history: list[dict[str, str]],
+    corrected_answer: str,
+    learner_level: str,
+) -> str:
+    loaded = get_contextual_model()
+    history_text = "\n".join(
+        f"Question: {turn['question']}\nLearner: {turn['answer']}"
+        for turn in conversation_history[-4:]
     )
-    encoded = {key: value.to(loaded.model.device) for key, value in encoded.items()}
-    with torch.inference_mode():
-        output_ids = loaded.model.generate(
-            input_ids=encoded["input_ids"],
-            attention_mask=encoded["attention_mask"],
-            max_new_tokens=128,
-            num_beams=4,
-            early_stopping=True,
-            no_repeat_ngram_size=2,
-        )
-    return loaded.tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+    prompt = (
+        "expand answer:\n"
+        f"topic: {topic}\n"
+        f"learner level: {learner_level}\n"
+        f"history: {history_text}\n"
+        f"answer: {corrected_answer}\n"
+        "Write a short, natural English passage closely related to the topic and answer. "
+        "Use language appropriate for the learner level."
+    )
+    return _generate(loaded, prompt, max_output_tokens=96, no_repeat_ngram_size=3)
 
 
 def load_models() -> tuple[dict[str, LoadedModel], dict[str, str]]:
@@ -166,3 +204,10 @@ def get_question_model() -> LoadedModel:
         return load_models()[0]["question"]
     except KeyError as exc:
         raise RuntimeError("The question model is not available.") from exc
+
+
+def get_contextual_model() -> LoadedModel:
+    try:
+        return load_models()[0]["contextual"]
+    except KeyError as exc:
+        raise RuntimeError("The contextual text model is not available.") from exc
